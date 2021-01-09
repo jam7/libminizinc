@@ -56,7 +56,7 @@ ScipPlugin::ScipPlugin()
                 "C:\\Program Files (x86)\\SCIPOptSuite 4.0.0\\bin\\scip.dll",
           }
 #else
-          "libscip"
+          "libscip.so"
 #endif
       ) {
   load();
