@@ -55,6 +55,9 @@
 #ifdef HAS_SCIP
 #include <minizinc/solvers/MIP/MIP_scip_solverfactory.hh>
 #endif
+#ifdef HAS_QUBO
+#include <minizinc/solvers/QUBO/qubo_solverfactory.hh>
+#endif
 #include <minizinc/solvers/fzn_solverfactory.hh>
 #include <minizinc/solvers/fzn_solverinstance.hh>
 #include <minizinc/solvers/mzn_solverfactory.hh>
@@ -86,6 +89,9 @@ SolverInitialiser::SolverInitialiser() {
 #endif
 #ifdef HAS_SCIP
   static SCIPSolverFactoryInitialiser _scip_init;
+#endif
+#ifdef HAS_QUBO
+  static QuboSolverFactoryInitialiser _va_init;
 #endif
   static FZNSolverFactoryInitialiser _fzn_init;
   static MZNSolverFactoryInitialiser _mzn_init;
