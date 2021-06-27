@@ -96,16 +96,12 @@ protected:
 #if 0
   geas::solver _solver;
 #endif
-  Model* _flat;
+  Model* _model;
 
-  SolveI::SolveType _objType = SolveI::ST_SAT;
+  SolveI::SolveType _objType = SolveI::ST_MIN;
   std::unique_ptr<QuboTypes::Variable> _objVar;
 
   QuboTypes::Variable& resolveVar(Expression* e);
-  bool addSolutionNoGood();
-
-  void registerConstraint(const std::string& name, poster p);
-  void registerConstraints();
 };
 
 class QuboSolverFactory : public SolverFactory {
