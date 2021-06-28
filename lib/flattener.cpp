@@ -750,6 +750,9 @@ void Flattener::flatten(const std::string& modelString, const std::string& model
           gopts.printStatistics = _flags.statistics;
           gopts.prePasses = _flagPrePasses;
 #endif
+#ifdef HAS_QUBO
+          _fopts.forQubo = _flags.forQubo;
+#endif
           FlatteningOptions pass_opts = _fopts;
           CompilePassFlags cfs;
           cfs.noMIPdomains = _flags.noMIPdomains;

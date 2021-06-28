@@ -847,6 +847,14 @@ void MznSolver::flatten(const std::string& modelString, const std::string& model
   _flt.setFlagVerbose(flagCompilerVerbose);
   _flt.setFlagStatistics(flagCompilerStatistics);
   _flt.setFlagTimelimit(flagOverallTimeLimit);
+
+  // For the case of qubo generation, we want to process mzn AST without
+  // flatten.  So, call flatten to read mzn AST and skip actual flatten
+  // process in Flattener with following forQubo flag.
+  if (_sf != nullptr && _sf->getId() == "org.minizinc.qubo") {
+    _flt.setFlagForQubo(true);
+  }
+
   _flt.flatten(modelString, modelName);
 }
 

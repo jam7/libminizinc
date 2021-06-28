@@ -16,6 +16,8 @@
 
 // #include <geas/solver/solver.h>
 
+// #define QUBO_USE_MZN_DIRECTLY
+
 namespace MiniZinc {
 
 class QuboOptions : public SolverInstanceBase::Options {
@@ -96,7 +98,6 @@ protected:
 #if 0
   geas::solver _solver;
 #endif
-  Model* _model;
 
   SolveI::SolveType _objType = SolveI::ST_MIN;
   std::unique_ptr<QuboTypes::Variable> _objVar;
@@ -115,7 +116,11 @@ public:
     return "VA - Another Lazy Clause Generation Solver";
   };
   std::string getVersion(SolverInstanceBase::Options* opt) override { return "0.0.1"; }
+#ifdef QUBO_USE_MZN_DIRECTLY
+  std::string getId() override { return "org.minizinc.mzn-mzn"; }
+#else
   std::string getId() override { return "org.minizinc.qubo"; }
+#endif
 
   bool processOption(SolverInstanceBase::Options* opt, int& i, std::vector<std::string>& argv,
                      const std::string& workingDir = std::string()) override;

@@ -52,6 +52,8 @@ struct FlatteningOptions {
   bool hasChecker;
   /// Output detailed timing information for flattening
   bool detailedTiming;
+  /// Doesn't flatten but does read maz AST for QUBO solver.
+  bool forQubo;;
   /// Default constructor
   FlatteningOptions()
       : keepOutputInFzn(false),
@@ -65,7 +67,8 @@ struct FlatteningOptions {
         outputMode(OUTPUT_ITEM),
         outputObjective(false),
         outputOutputItem(false),
-        detailedTiming(false) {}
+        detailedTiming(false),
+        forQubo(false) {}
 };
 
 class Pass {

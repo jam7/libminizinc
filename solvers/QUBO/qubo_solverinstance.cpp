@@ -14,17 +14,28 @@
 namespace MiniZinc {
 QuboSolverInstance::QuboSolverInstance(Env& env, std::ostream& log,
                                        SolverInstanceBase::Options* opt)
-    : SolverInstanceImpl<QuboTypes>(env, log, opt), _model(env.model()) {
+    : SolverInstanceImpl<QuboTypes>(env, log, opt) {
 }
 
 void QuboSolverInstance::processFlatZinc() {
   std::cerr << "hello QuboSolverInstance::processFlatZinc()\n";
+  // Process normalization here
+  Printer p(std::cerr);
+  std::cerr << "Model--------\n";
+  p.print(_env.model());
+  std::cerr << "Flat--------\n";
+  p.print(_env.flat());
 }
 
 SolverInstanceBase::Status MiniZinc::QuboSolverInstance::solve() {
   std::cerr << "hello QuboSolverInstance::solve()\n";
   SolverInstanceBase::Status status = SolverInstance::ERROR;
   auto _opt = static_cast<QuboOptions&>(*_options);
+  Printer p(std::cerr);
+  std::cerr << "Model--------\n";
+  p.print(_env.model());
+  std::cerr << "Flat--------\n";
+  p.print(_env.flat());
 #if 0
   auto remaining_time = [_opt] {
     if (_opt.time == std::chrono::milliseconds(0)) {
@@ -36,7 +47,7 @@ SolverInstanceBase::Status MiniZinc::QuboSolverInstance::solve() {
   };
 #endif
   // Set objective
-  SolveI* si = _model->solveItem();
+  SolveI* si = _env.model()->solveItem();
   if (si->e() != nullptr) {
     _objType = si->st();
     _objVar = std::unique_ptr<QuboTypes::Variable>(new QuboTypes::Variable(resolveVar(si->e())));
@@ -249,7 +260,11 @@ void QuboSolverInstance::printStatistics() {
 
 QuboSolverFactory::QuboSolverFactory() {
   std::cerr << "QuboSovlerFactory\n";
+#ifdef QUBO_USE_MZN_DIRECTLY
+  SolverConfig sc("org.minizinc.mzn-mzn", getVersion(nullptr));
+#else
   SolverConfig sc("org.minizinc.qubo", getVersion(nullptr));
+#endif
   sc.name("Qubo");
   sc.mznlibVersion(1);
   // Doesn't support fzn.

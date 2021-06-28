@@ -60,6 +60,8 @@ public:
   bool getFlagVerbose() const { return _flags.verbose; }
   void setFlagStatistics(bool f) { _flags.statistics = f; }
   bool getFlagStatistics() const { return _flags.statistics; }
+  void setFlagForQubo(bool f) { _flags.forQubo = f; }
+  bool getFlagForQubo() const { return _flags.forQubo; }
   void setFlagTimelimit(unsigned long long int t) { _fopts.timeout = t; }
   unsigned long long int getFlagTimelimit() const { return _fopts.timeout; }
   void setFlagOutputByDefault(bool f) { _fOutputByDefault = f; }
@@ -111,6 +113,7 @@ private:
     bool outputObjective = false;
     bool outputOutputItem = false;
     bool compileSolutionCheckModel = false;
+    bool forQubo = false;
   } _flags;
 
   int _optMIPDmaxIntvEE = 0;

@@ -2853,6 +2853,9 @@ private:
 void flatten(Env& e, FlatteningOptions opt) {
   ItemTimer::TimingMap timingMap_o;
   ItemTimer::TimingMap* timingMap = opt.detailedTiming ? &timingMap_o : nullptr;
+  if (opt.forQubo) {
+    return;
+  }
   try {
     EnvI& env = e.envi();
     env.fopts = opt;
