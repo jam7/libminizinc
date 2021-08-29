@@ -17,25 +17,306 @@ QuboSolverInstance::QuboSolverInstance(Env& env, std::ostream& log,
     : SolverInstanceImpl<QuboTypes>(env, log, opt) {
 }
 
+// Normalize a given model
+void QuboSolverInstance::normalizeModel() {
+}
+
+// Flatten a given model
+void QuboSolverInstance::flattenModel() {
+  auto _opt = static_cast<QuboOptions&>(*_options);
+  FlatteningOptions fopts = FlatteningOptions();
+  fopts.verbose = _opt.verbose;
+  // TODO: get other options from MznSolver.
+  //   _flt.setFlagStatistics(flagCompilerStatistics);
+  //   _flt.setFlagTimelimit(flagOverallTimeLimit);
+  try {
+    flatten(env(), fopts);
+  } catch (LocationException& e) {
+    if (_opt.verbose) {
+      _log << std::endl;
+    }
+    std::ostringstream errstream;
+    errstream << e.what() << ": " << std::endl;
+    env().dumpErrorStack(errstream);
+    errstream << "  " << e.msg() << std::endl;
+    throw Error(errstream.str());
+  }
+
+#if 0
+  {
+    Printer p(std::cerr);
+    std::cerr << "Flat--------\n";
+    p.print(env().flat());
+    std::cerr << "SolveItem--------\n";
+    p.print(env().flat()->solveItem());
+  }
+#endif
+
+  // Doesn't perform MIP domain.
+
+  // Optimize constraint chains.
+  optimize(env(), true);
+
+  // Warning checks.
+  for (const auto& i : env().warnings()) {
+    _log << "\n  WARNING: " << i;
+  }
+#if 0
+  if (_compflags.werror && !env()->warnings().empty()) {
+    throw Error("errors encountered");
+  }
+#endif
+  env().clearWarnings();
+
+  // Convert to old fzn.
+  oldflatzinc(env());
+}
+
+// Process variables.
+//
+// Parse vardecls and register them through insertVar.
+void QuboSolverInstance::processVariables() {
+  auto _opt = static_cast<QuboOptions&>(*_options);
+
+  SolveI* solveItem = getEnv()->flat()->solveItem();
+  VarDecl* objVd = nullptr;
+
+  if (solveItem->st() != SolveI::SolveType::ST_SAT) {
+    if (Id* id = solveItem->e()->dynamicCast<Id>()) {
+      objVd = id->decl();
+    } else {
+      std::cerr << "Objective must be Id: " << solveItem->e() << std::endl;
+      throw InternalError("Objective must be Id");
+    }
+  }
+
+  for (VarDeclIterator it = getEnv()->flat()->vardecls().begin();
+       it != getEnv()->flat()->vardecls().end(); ++it) {
+    if (it->removed()) {
+      continue;
+    }
+    VarDecl* vd = it->e();
+    if (!vd->ann().isEmpty()) {
+      if (vd->ann().containsCall(constants().ann.output_array) ||
+          vd->ann().contains(constants().ann.output_var)) {
+        _varsWithOutput.push_back(vd);
+        //         std::cerr << (*vd);
+        //         if ( vd->e() )
+        //           cerr << " = " << (*vd->e());
+        //         cerr << endl;
+      }
+    }
+    if (vd->type().dim() == 0 && it->e()->type().isvar() && !it->removed()) {
+      MiniZinc::TypeInst* ti = it->e()->ti();
+      typename QuboVariable::Type vType = QuboVariable::Type::FLOAT_TYPE;
+      if (ti->type().isvarint() || ti->type().isint()) {
+        vType = QuboVariable::Type::INT_TYPE;
+      } else if (ti->type().isvarbool() || ti->type().isbool()) {
+        vType = QuboVariable::Type::BOOL_TYPE;
+      } else if (!(ti->type().isvarfloat() || ti->type().isfloat())) {
+        std::stringstream ssm;
+        ssm << "This type of var is not handled by MIP: " << *it << std::endl;
+        ssm << "  VarDecl flags (ti, bt, st, ot): " << ti->type().ti() << ti->type().bt()
+            << ti->type().st() << ti->type().ot() << ", dim == " << ti->type().dim()
+            << "\nRemove the variable or add a constraint so it is redefined." << std::endl;
+        throw InternalError(ssm.str());
+      }
+      double lb = 0.0;
+      double ub = 1.0;  // for bool
+      if (ti->domain() != nullptr) {
+        if (QuboVariable::Type::FLOAT_TYPE == vType) {
+          FloatBounds fb = compute_float_bounds(getEnv()->envi(), it->e()->id());
+          if (fb.valid) {
+            lb = fb.l.toDouble();
+            ub = fb.u.toDouble();
+          } else {
+            lb = 1.0;
+            ub = 0.0;
+          }
+        } else if (QuboVariable::Type::INT_TYPE == vType) {
+          IntBounds ib = compute_int_bounds(getEnv()->envi(), it->e()->id());
+          if (ib.valid) {  // Normally should be
+            lb = static_cast<double>(ib.l.toInt());
+            ub = static_cast<double>(ib.u.toInt());
+          } else {
+            lb = 1;
+            ub = 0;
+          }
+        }
+      } else if (QuboVariable::Type::BOOL_TYPE != vType) {
+        lb = -INFINITY;  // if just 1 bound inf, using MZN's default?  TODO
+        ub = -lb;
+      }
+
+      //       IntSetVal* dom = eval_intset(env,vdi->e()->ti()->domain());
+      //       if (dom->size() > 1)
+      //         throw runtime_error("MIPSolverinstance: domains with holes ! supported, use
+      //         --MIPdomains");
+
+      Id* id = it->e()->id();
+      MZN_ASSERT_HARD(id == id->decl()->id());  // Assume all unified
+      MZN_ASSERT_HARD(it->e() == id->decl());   // Assume all unified
+      double obj = vd == objVd ? 1.0 : 0.0;
+      auto* decl00 = follow_id_to_decl(it->e());
+      MZN_ASSERT_HARD(decl00->isa<VarDecl>());
+      {
+        auto* vd00 = decl00->dynamicCast<VarDecl>();
+        if (nullptr != vd00->e()) {
+          // Should be a const
+          auto dRHS = exprToConst(vd00->e());
+          lb = std::max(lb, dRHS);
+          ub = std::min(ub, dRHS);
+        }
+#if 0
+        if (it->e() != vd00) {                             // A different vardecl
+          res = exprToVar(vd00->id());                     // Assume FZN is sorted.
+          MZN_ASSERT_HARD(!getMIPWrapper()->fPhase1Over);  // Still can change colUB, colObj
+          /// Tighten the ini-expr's bounds
+          lb = getMIPWrapper()->colLB.at(res) = std::max(getMIPWrapper()->colLB.at(res), lb);
+          ub = getMIPWrapper()->colUB.at(res) = std::min(getMIPWrapper()->colUB.at(res), ub);
+          if (0.0 != obj) {
+            getMIPWrapper()->colObj.at(res) = obj;
+          }
+        } else {
+          res = getMIPWrapper()->addVar(obj, lb, ub, vType, id->str().c_str());
+        }
+#endif
+      }
+      /// Test infeasibility
+      if (lb > ub) {
+        _status = SolverInstance::UNSAT;
+        if (_opt.verbose) {
+          std::cerr << "  VarDecl '" << *(it->e()) << "' seems infeasible: computed bounds [" << lb
+                    << ", " << ub << ']' << std::endl;
+        }
+      }
+      if (0.0 != obj) {
+#if 0
+        dObjVarLB = lb;
+        dObjVarUB = ub;
+        getMIPWrapper()->output.nObjVarIndex = res;
+        if (_opt.verbose) {
+          std::cerr << "  MIP: objective variable index (0-based): " << res << std::endl;
+        }
+#endif
+      }
+      insertVar(id, QuboVariable(vType));
+      // _variableMap.insert(id, res);
+      // assert(res == _variableMap.get(id));
+    }
+  }
+#if 0
+  if (_opt.verbose && (!_mipWrapper->sLitValues.empty())) {
+    std::cerr << "  MIPSolverinstance: during Phase 1,  " << _mipWrapper->nLitVars
+              << " literals with " << _mipWrapper->sLitValues.size() << " values used."
+              << std::endl;
+  }
+#endif
+#if 0
+  if (!getMIPWrapper()->fPhase1Over) {
+    getMIPWrapper()->addPhase1Vars();
+  }
+#endif
+}
+
+// Process variables.
+//
+// Parse vardecls and register them through insertVar.
+void QuboSolverInstance::processConstraints() {
+  auto _opt = static_cast<QuboOptions&>(*_options);
+
+  // Constraints
+  for (ConstraintIterator it = env().flat()->constraints().begin(); it != env().flat()->constraints().end();
+       ++it) {
+    if (!it->removed()) {
+      if (auto* c = it->e()->dynamicCast<Call>()) {
+        auto* eVD = get_annotation(c->ann(), constants().ann.defines_var);
+        _log << "constraint: " << *c << ", " << *eVD << "\n";
+        // _constraintRegistry.post(c);
+        Call* pC = eVD->dynamicCast<Call>();
+        _log << "call: " << *pC << "\n";
+        _log << "call arg0: " << *pC->arg(0) << "\n";
+        Id* id = pC->arg(0)->dynamicCast<Id>();
+        VarDecl* vd = id->decl();
+        _log << "call arg0 vd: " << *vd << "\n";
+      }
+    }
+  }
+}
+
 void QuboSolverInstance::processFlatZinc() {
-  std::cerr << "hello QuboSolverInstance::processFlatZinc()\n";
-  // Process normalization here
-  Printer p(std::cerr);
-  std::cerr << "Model--------\n";
-  p.print(_env.model());
-  std::cerr << "Flat--------\n";
-  p.print(_env.flat());
+  auto _opt = static_cast<QuboOptions&>(*_options);
+
+#if 0
+  {
+    Printer p(std::cerr);
+    std::cerr << "Model--------\n";
+    p.print(env().model());
+    std::cerr << "SolveItem--------\n";
+    p.print(env().model()->solveItem());
+  }
+#endif
+
+  // Process normalization here.
+  normalizeModel();
+  // Process flatten here.
+  flattenModel();
+  // Process variables.
+  processVariables();
+  // Process constraints.
+  processConstraints();
+
+#if 0
+  {
+    Printer p(std::cerr);
+    std::cerr << "Flat--------\n";
+    p.print(env().flat());
+    std::cerr << "SolveItem--------\n";
+    p.print(env().flat()->solveItem());
+  }
+#endif
+}
+
+// Calculate QUBO matrix.
+bool MiniZinc::QuboSolverInstance::calcQubo(Expression* e) {
+
+#if 1
+  {
+    Printer p(std::cerr);
+    std::cerr << "solveItem\n";
+    p.print(e);
+  }
+#endif
+  VarDecl* objVd;
+  if (Id* id = e->dynamicCast<Id>()) {
+    objVd = id->decl();
+  } else {
+    std::cerr << "Objective must be Id: " << e << std::endl;
+    throw InternalError("Objective must be Id");
+  }
+  _log << *objVd << "\n";
+#if 1
+  dumpVar();
+#endif
+  if (_objType == SolveI::ST_MIN) {
+  } else {
+    assert(_objType == SolveI::ST_MAX);
+  }
+#if 1
+  {
+    Printer p(std::cerr);
+    std::cerr << "Flat--------\n";
+    p.print(env().flat());
+    std::cerr << "SolveItem--------\n";
+    p.print(env().flat()->solveItem());
+  }
+#endif
+  return true;
 }
 
 SolverInstanceBase::Status MiniZinc::QuboSolverInstance::solve() {
-  std::cerr << "hello QuboSolverInstance::solve()\n";
   SolverInstanceBase::Status status = SolverInstance::ERROR;
   auto _opt = static_cast<QuboOptions&>(*_options);
-  Printer p(std::cerr);
-  std::cerr << "Model--------\n";
-  p.print(_env.model());
-  std::cerr << "Flat--------\n";
-  p.print(_env.flat());
 #if 0
   auto remaining_time = [_opt] {
     if (_opt.time == std::chrono::milliseconds(0)) {
@@ -47,15 +328,31 @@ SolverInstanceBase::Status MiniZinc::QuboSolverInstance::solve() {
   };
 #endif
   // Set objective
-  SolveI* si = _env.model()->solveItem();
+  SolveI* si = env().flat()->solveItem();
   if (si->e() != nullptr) {
     _objType = si->st();
     _objVar = std::unique_ptr<QuboTypes::Variable>(new QuboTypes::Variable(resolveVar(si->e())));
     // Support only MIN and MAX.
-    if (_objType != SolveI::ST_MIN || _objType != SolveI::ST_MAX) {
+    if (_objType != SolveI::ST_MIN && _objType != SolveI::ST_MAX) {
       return status;
     }
   }
+  if (!calcQubo(si->e())) {
+    return status;
+  }
+  status = SolverInstance::SAT;
+
+#if 0
+  {
+    Printer p(std::cerr);
+    std::cerr << "Flat--------\n";
+    p.print(env().flat());
+    std::cerr << "SolveItem--------\n";
+    p.print(env().flat()->solveItem());
+    std::cerr << "solveItem\n";
+    p.print(si->e());
+  }
+#endif
 #if 0
   if (_objType == SolveI::ST_MIN) {
     // TODO: Add float objectives
@@ -153,6 +450,20 @@ Expression* QuboSolverInstance::getSolutionValue(Id* id) {
 
 void QuboSolverInstance::resetSolver() { assert(false); }
 
+unsigned long QuboVariable::global_index = 0;
+
+inline void QuboSolverInstance::insertVar(Id* id, QuboTypes::Variable var) {
+  // std::cerr << *id << ": " << id->decl() << std::endl;
+  _variableMap.insert(id->decl()->id(), var);
+}
+
+inline void QuboSolverInstance::dumpVar(void) {
+  _log << "dumpVar----------------\n";
+  for (auto const& pair : _variableMap) {
+    _log << *pair.first << ": " << pair.second.index() << "\n";
+  }
+}
+
 QuboTypes::Variable& QuboSolverInstance::resolveVar(Expression* e) {
   if (auto* id = e->dynamicCast<Id>()) {
     return _variableMap.get(id->decl()->id());
@@ -163,12 +474,37 @@ QuboTypes::Variable& QuboSolverInstance::resolveVar(Expression* e) {
   if (auto* aa = e->dynamicCast<ArrayAccess>()) {
     auto* ad = aa->v()->cast<Id>()->decl();
     auto idx = aa->idx()[0]->cast<IntLit>()->v().toInt();
-    auto* al = eval_array_lit(_env.envi(), ad->e());
+    auto* al = eval_array_lit(env().envi(), ad->e());
     return _variableMap.get((*al)[idx]->cast<Id>());
   }
   std::stringstream ssm;
   ssm << "Expected Id, VarDecl or ArrayAccess instead of \"" << *e << "\"";
   throw InternalError(ssm.str());
+}
+
+std::pair<double, bool> QuboSolverInstance::exprToConstEasy(Expression* e) {
+  std::cerr << "----exprToConst(" << *e << ")\n";
+  std::pair<double, bool> res{0.0, true};
+  if (auto* il = e->dynamicCast<IntLit>()) {
+    res.first = (static_cast<double>(il->v().toInt()));
+  } else if (auto* fl = e->dynamicCast<FloatLit>()) {
+    res.first = (fl->v().toDouble());
+  } else if (auto* bl = e->dynamicCast<BoolLit>()) {
+    res.first = static_cast<double>(bl->v());
+  } else {
+    res.second = false;
+  }
+  return res;
+}
+
+double QuboSolverInstance::exprToConst(Expression* e) {
+  const auto e2ce = exprToConstEasy(e);
+  if (!e2ce.second) {
+    std::ostringstream oss;
+    oss << "ExprToConst: expected a numeric/bool literal, getting " << *e;
+    throw InternalError(oss.str());
+  }
+  return e2ce.first;
 }
 
 #if 0
@@ -259,7 +595,6 @@ void QuboSolverInstance::printStatistics() {
 }
 
 QuboSolverFactory::QuboSolverFactory() {
-  std::cerr << "QuboSovlerFactory\n";
 #ifdef QUBO_USE_MZN_DIRECTLY
   SolverConfig sc("org.minizinc.mzn-mzn", getVersion(nullptr));
 #else
@@ -303,8 +638,6 @@ SolverInstanceBase* QuboSolverFactory::doCreateSI(Env& env, std::ostream& log,
 bool QuboSolverFactory::processOption(SolverInstanceBase::Options* opt, int& i,
                                       std::vector<std::string>& argv,
                                       const std::string& workingDir) {
-  std::cerr << "hello QuboSolverFactory::processOption()\n";
-
   auto& _opt = static_cast<QuboOptions&>(*opt);
   CLOParser cop(i, argv);
   int num = -1;

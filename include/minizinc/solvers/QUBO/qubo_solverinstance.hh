@@ -42,8 +42,11 @@ protected:
   /// the index in the iv/bv/fv array in the space, depending the type _t
   unsigned int _index;
 
+private:
+  static unsigned long global_index;
+
 public:
-  explicit QuboVariable(unsigned int i) : _t(BOOL_TYPE), _index(i) {};
+  explicit QuboVariable(Type t) : _t(t), _index(global_index++) {}
 
   QuboVariable(const QuboVariable& gv) : _t(gv._t) {
     _index = gv._index;
@@ -67,6 +70,11 @@ public:
   QuboSolverInstance(Env& env, std::ostream& log, SolverInstanceBase::Options* opt);
   ~QuboSolverInstance() override = default;
   void processFlatZinc() override;
+
+  void normalizeModel();
+  void flattenModel();
+  void processVariables();
+  void processConstraints();
 #if 0
   geas::solver_data* solverData() const { return _solver.data; }
   geas::solver& solver() { return _solver; }
@@ -94,6 +102,11 @@ public:
   geas::intvar zero;
 #endif
 
+  // Some expr convert functions taken from MIP_solverinstance.
+  std::pair<double, bool> exprToConstEasy(Expression* e);
+  double exprToConst(Expression* e);
+  bool calcQubo(Expression* e);
+
 protected:
 #if 0
   geas::solver _solver;
@@ -102,7 +115,9 @@ protected:
   SolveI::SolveType _objType = SolveI::ST_MIN;
   std::unique_ptr<QuboTypes::Variable> _objVar;
 
-  QuboTypes::Variable& resolveVar(Expression* e);
+  void insertVar(Id*, QuboTypes::Variable);
+  QuboTypes::Variable& resolveVar(Expression*);
+  void dumpVar();
 };
 
 class QuboSolverFactory : public SolverFactory {
