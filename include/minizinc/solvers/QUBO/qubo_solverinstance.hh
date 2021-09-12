@@ -14,6 +14,8 @@
 #include <minizinc/flattener.hh>
 #include <minizinc/solver.hh>
 
+#include <iostream>
+
 // #include <geas/solver/solver.h>
 
 // #define QUBO_USE_MZN_DIRECTLY
@@ -29,6 +31,7 @@ public:
   int objProbeLimit = 0;
   bool statistics = false;
   bool verbose = false;
+  bool debug = false;
   std::chrono::milliseconds time = std::chrono::milliseconds(0);
 };
 
@@ -73,6 +76,29 @@ public:
   /// or others).
   unsigned long index() const { return _qv ? _qv->index() : 0; }
 };
+
+/// An expression to represent a relationship of qubo variables like below:
+///   H_i * vars[0]
+///   J_ij * vars[0] * vars[1]
+class QuboExpression {
+protected:
+  /// Coeffcient
+  IntVal coef;
+  /// Variables
+  std::vector<const SolverVariable*> vars;
+
+public:
+  QuboExpression(void) : coef(1) {}
+  QuboExpression(const IntVal& c) : coef(c) {}
+  QuboExpression(const QuboExpression& rhs) : coef(rhs.coef), vars(rhs.vars) {}
+
+  const IntVal& getCoef(void) const { return coef; }
+  const std::vector<const SolverVariable*>& getVars(void) const { return vars; }
+
+  void mulCoef(const IntVal& c) { coef *= c; }
+  void mulVar(const SolverVariable* v) { vars.push_back(v); }
+};
+std::ostream& operator<<(std::ostream& os, const QuboExpression& qe);
 
 class QuboTypes {
 public:
@@ -120,12 +146,15 @@ public:
   // Some expr convert functions taken from MIP_solverinstance.
   std::pair<double, bool> exprToConstEasy(Expression*);
   double exprToConst(Expression*);
-  bool calcQubo(const IntVal&, Expression*);
-  bool calcQubo(const IntVal&, Id*);
-  bool calcCallQubo(const IntVal&, Id*, Call*);
-  bool calcIntLinEqQubo(const IntVal&, Id*, Expression*, Expression*);
-  bool calcIntTimesQubo(const IntVal&, Id*, Expression*, Expression*);
-  bool calcBool2IntQubo(const IntVal&, Id*, Expression*, Expression*);
+  bool calcQubo(QuboExpression&, Expression*, bool terminate);
+  bool calcQubo(QuboExpression&, Id*, bool terminate);
+  bool calcCallQubo(QuboExpression&, Id*, Call*, bool terminate);
+  bool calcIntLinEqQubo(QuboExpression&, Id*, Expression*, Expression*,
+                        bool terminate);
+  bool calcIntTimesQubo(QuboExpression&, Id*, Expression*, Expression*,
+                        bool terminate);
+  bool calcBool2IntQubo(QuboExpression&, Id*, Expression*, Expression*,
+                        bool terminate);
 
 protected:
 #if 0
