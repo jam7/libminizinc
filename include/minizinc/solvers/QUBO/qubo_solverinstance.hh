@@ -33,35 +33,50 @@ public:
 };
 
 class QuboVariable {
-public:
-  enum Type { BOOL_TYPE, FLOAT_TYPE, INT_TYPE };
-
 protected:
-  /// Type of the variable
-  Type _t;
-  /// the index in the iv/bv/fv array in the space, depending the type _t
-  unsigned int _index;
+  /// The index of qubo variable, 1 origin.
+  unsigned long _index;
 
 private:
   static unsigned long global_index;
 
 public:
-  explicit QuboVariable(Type t) : _t(t), _index(global_index++) {}
+  explicit QuboVariable() : _index(global_index++) {}
 
-  QuboVariable(const QuboVariable& gv) : _t(gv._t) {
+  QuboVariable(const QuboVariable& gv) {
     _index = gv._index;
   }
+
+  unsigned long index() const { return _index; }
+};
+
+class SolverVariable {
+public:
+  enum Type { BOOL_TYPE, FLOAT_TYPE, INT_TYPE };
+
+protected:
+  /// Type of the variable.
+  Type _t;
+  /// Pointer to qubo variable.
+  QuboVariable* _qv;
+
+public:
+  explicit SolverVariable(Id* id);
+  SolverVariable(const SolverVariable& gv) : _qv(gv._qv) {}
 
   bool isBool() const { return _t == BOOL_TYPE; }
   bool isFloat() const { return _t == FLOAT_TYPE; }
   bool isInt() const { return _t == INT_TYPE; }
 
-  unsigned int index() const { return _index; }
+  /// The index of qubo variable, 1 origin.
+  /// Return 0 if and only if this is not qubo variable (introduced variable
+  /// or others).
+  unsigned long index() const { return _qv ? _qv->index() : 0; }
 };
 
 class QuboTypes {
 public:
-  typedef QuboVariable Variable;
+  typedef SolverVariable Variable;
   typedef MiniZinc::Statistics Statistics;
 };
 

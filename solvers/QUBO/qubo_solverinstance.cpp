@@ -108,11 +108,11 @@ void QuboSolverInstance::processVariables() {
     }
     if (vd->type().dim() == 0 && it->e()->type().isvar() && !it->removed()) {
       MiniZinc::TypeInst* ti = it->e()->ti();
-      typename QuboVariable::Type vType = QuboVariable::Type::FLOAT_TYPE;
+      QuboTypes::Variable::Type vType = QuboTypes::Variable::Type::FLOAT_TYPE;
       if (ti->type().isvarint() || ti->type().isint()) {
-        vType = QuboVariable::Type::INT_TYPE;
+        vType = QuboTypes::Variable::Type::INT_TYPE;
       } else if (ti->type().isvarbool() || ti->type().isbool()) {
-        vType = QuboVariable::Type::BOOL_TYPE;
+        vType = QuboTypes::Variable::Type::BOOL_TYPE;
       } else if (!(ti->type().isvarfloat() || ti->type().isfloat())) {
         std::stringstream ssm;
         ssm << "This type of var is not handled by MIP: " << *it << std::endl;
@@ -124,7 +124,7 @@ void QuboSolverInstance::processVariables() {
       double lb = 0.0;
       double ub = 1.0;  // for bool
       if (ti->domain() != nullptr) {
-        if (QuboVariable::Type::FLOAT_TYPE == vType) {
+        if (QuboTypes::Variable::Type::FLOAT_TYPE == vType) {
           FloatBounds fb = compute_float_bounds(getEnv()->envi(), it->e()->id());
           if (fb.valid) {
             lb = fb.l.toDouble();
@@ -133,7 +133,7 @@ void QuboSolverInstance::processVariables() {
             lb = 1.0;
             ub = 0.0;
           }
-        } else if (QuboVariable::Type::INT_TYPE == vType) {
+        } else if (QuboTypes::Variable::Type::INT_TYPE == vType) {
           IntBounds ib = compute_int_bounds(getEnv()->envi(), it->e()->id());
           if (ib.valid) {  // Normally should be
             lb = static_cast<double>(ib.l.toInt());
@@ -143,7 +143,7 @@ void QuboSolverInstance::processVariables() {
             ub = 0;
           }
         }
-      } else if (QuboVariable::Type::BOOL_TYPE != vType) {
+      } else if (QuboTypes::Variable::Type::BOOL_TYPE != vType) {
         lb = -INFINITY;  // if just 1 bound inf, using MZN's default?  TODO
         ub = -lb;
       }
@@ -200,9 +200,7 @@ void QuboSolverInstance::processVariables() {
         }
 #endif
       }
-      insertVar(id, QuboVariable(vType));
-      // _variableMap.insert(id, res);
-      // assert(res == _variableMap.get(id));
+      insertVar(id, SolverVariable(id));
     }
   }
 #if 0
@@ -219,13 +217,14 @@ void QuboSolverInstance::processVariables() {
 #endif
 }
 
-// Process variables.
+// Process contaraints.
 //
-// Parse vardecls and register them through insertVar.
+// Parse constraints...
 void QuboSolverInstance::processConstraints() {
   auto _opt = static_cast<QuboOptions&>(*_options);
 
   // Constraints
+#if 0
   for (ConstraintIterator it = env().flat()->constraints().begin(); it != env().flat()->constraints().end();
        ++it) {
     if (!it->removed()) {
@@ -242,6 +241,7 @@ void QuboSolverInstance::processConstraints() {
       }
     }
   }
+#endif
 }
 
 void QuboSolverInstance::processFlatZinc() {
@@ -450,7 +450,18 @@ Expression* QuboSolverInstance::getSolutionValue(Id* id) {
 
 void QuboSolverInstance::resetSolver() { assert(false); }
 
-unsigned long QuboVariable::global_index = 0;
+unsigned long QuboVariable::global_index = 1;
+
+SolverVariable::SolverVariable(Id* id) : _qv(nullptr) {
+  _t = QuboTypes::Variable::Type::BOOL_TYPE;
+  // std::cerr << "SolverVariable id: " << *id << "\n";
+  if (id->decl()->ann().contains(constants().ann.is_defined_var)) {
+    // std::cerr << "  is_defined_var\n";
+  } else {
+    _qv = new QuboVariable();
+    // std::cerr << "  is QuboVariable\n";
+  }
+}
 
 inline void QuboSolverInstance::insertVar(Id* id, QuboTypes::Variable var) {
   // std::cerr << *id << ": " << id->decl() << std::endl;
