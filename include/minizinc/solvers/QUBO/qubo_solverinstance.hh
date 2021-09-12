@@ -118,9 +118,14 @@ public:
 #endif
 
   // Some expr convert functions taken from MIP_solverinstance.
-  std::pair<double, bool> exprToConstEasy(Expression* e);
-  double exprToConst(Expression* e);
-  bool calcQubo(Expression* e);
+  std::pair<double, bool> exprToConstEasy(Expression*);
+  double exprToConst(Expression*);
+  bool calcQubo(const IntVal&, Expression*);
+  bool calcQubo(const IntVal&, Id*);
+  bool calcCallQubo(const IntVal&, Id*, Call*);
+  bool calcIntLinEqQubo(const IntVal&, Id*, Expression*, Expression*);
+  bool calcIntTimesQubo(const IntVal&, Id*, Expression*, Expression*);
+  bool calcBool2IntQubo(const IntVal&, Id*, Expression*, Expression*);
 
 protected:
 #if 0
@@ -133,6 +138,15 @@ protected:
   void insertVar(Id*, QuboTypes::Variable);
   QuboTypes::Variable& resolveVar(Expression*);
   void dumpVar();
+
+  // Id to call map
+  IdMap<Call*> _variableCallMap;
+  void insertCall(Id*, Call*);
+  Call* resolveCall(Id*);
+  void dumpCall(void);
+
+  // Utility functions
+  bool isInt(Expression*, long long);
 };
 
 class QuboSolverFactory : public SolverFactory {

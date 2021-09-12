@@ -224,7 +224,6 @@ void QuboSolverInstance::processConstraints() {
   auto _opt = static_cast<QuboOptions&>(*_options);
 
   // Constraints
-#if 0
   for (ConstraintIterator it = env().flat()->constraints().begin(); it != env().flat()->constraints().end();
        ++it) {
     if (!it->removed()) {
@@ -233,15 +232,12 @@ void QuboSolverInstance::processConstraints() {
         _log << "constraint: " << *c << ", " << *eVD << "\n";
         // _constraintRegistry.post(c);
         Call* pC = eVD->dynamicCast<Call>();
-        _log << "call: " << *pC << "\n";
-        _log << "call arg0: " << *pC->arg(0) << "\n";
         Id* id = pC->arg(0)->dynamicCast<Id>();
-        VarDecl* vd = id->decl();
-        _log << "call arg0 vd: " << *vd << "\n";
+        assert(id != nullptr);
+        insertCall(id, c);
       }
     }
   }
-#endif
 }
 
 void QuboSolverInstance::processFlatZinc() {
@@ -278,40 +274,155 @@ void QuboSolverInstance::processFlatZinc() {
 }
 
 // Calculate QUBO matrix.
-bool MiniZinc::QuboSolverInstance::calcQubo(Expression* e) {
-
-#if 1
-  {
-    Printer p(std::cerr);
-    std::cerr << "solveItem\n";
-    p.print(e);
-  }
-#endif
+bool MiniZinc::QuboSolverInstance::calcQubo(const IntVal& coef, Expression* e) {
+  std::cerr << "calcQuboE(" << coef << ", " << *e << ")\n";
   VarDecl* objVd;
-  if (Id* id = e->dynamicCast<Id>()) {
-    objVd = id->decl();
+  Id* id = e->dynamicCast<Id>();
+  if (id != nullptr) {
+    return calcQubo(coef, id);
+  }
+  return false;
+}
+
+bool MiniZinc::QuboSolverInstance::calcQubo(const IntVal& coef, Id* id) {
+  std::cerr << "calcQubo(" << coef << ", " << *id << ")\n";
+  std::cerr << "Id decl: " << *id->decl() << "\n";
+  if (Call* defVar = id->decl()->ann().getCall(constants().ann.defines_var)) {
+    std::stringstream ssm;
+    ssm << "Doesn't recognize defines_var \"" << *defVar << "\"";
+    throw InternalError(ssm.str());
+  } else if (id->decl()->ann().contains(constants().ann.is_defined_var)) {
+    std::cerr << "definedVar:\n";
+    Call* call = resolveCall(id);
+    return calcCallQubo(coef, id, call);
   } else {
-    std::cerr << "Objective must be Id: " << e << std::endl;
-    throw InternalError("Objective must be Id");
+    QuboTypes::Variable& var = resolveVar(follow_id_to_decl(id));
+    std::cerr << "Variable: " << var.index() << "\n";
+    return true;
   }
-  _log << *objVd << "\n";
-#if 1
-  dumpVar();
-#endif
-  if (_objType == SolveI::ST_MIN) {
-  } else {
-    assert(_objType == SolveI::ST_MAX);
+  std::stringstream ssm;
+  ssm << "Doesn't recognize \"" << *id << "\"";
+  throw InternalError(ssm.str());
+}
+
+bool MiniZinc::QuboSolverInstance::calcCallQubo(const IntVal& coef, Id* id,
+                                                Call* call) {
+  std::cerr << "calcCallQubo(" << *call << ")\n";
+  if (call->id() == "int_lin_eq") {
+    // e.g.:
+    // int_lin_eq(
+    //     [1,1,1,1,1,1,-1],
+    //     [X_INTRODUCED_7_,X_INTRODUCED_9_,X_INTRODUCED_11_,X_INTRODUCED_13_,
+    //      X_INTRODUCED_15_,X_INTRODUCED_17_,cost],
+    //     0):: defines_var(cost)
+    assert(call->argCount() == 3);
+    if (isInt(call->arg(2), 0)) {
+      bool ret = calcIntLinEqQubo(coef, id, call->arg(0), call->arg(1));
+      if (ret == true)
+        return true;
+    }
+  } else if (call->id() == "int_times") {
+    // e.g.:
+    // int_times(X_INTRODUCED_7_,X_INTRODUCED_1_,X_INTRODUCED_8_)::
+    //     defines_var(X_INTRODUCED_8_)"
+    assert(call->argCount() == 3);
+    if (call->arg(2)->cast<Id>() == id) {
+      bool ret = calcIntTimesQubo(coef, id, call->arg(0), call->arg(1));
+      if (ret == true)
+        return true;
+    }
+  } else if (call->id() == "bool2int") {
+    // e.g.:
+    // bool2int(X_INTRODUCED_6_,X_INTRODUCED_7_):: defines_var(X_INTRODUCED_7_)
+    assert(call->argCount() == 2);
+    bool ret = calcBool2IntQubo(coef, id, call->arg(0), call->arg(1));
+    if (ret == true)
+      return true;
   }
-#if 1
-  {
-    Printer p(std::cerr);
-    std::cerr << "Flat--------\n";
-    p.print(env().flat());
-    std::cerr << "SolveItem--------\n";
-    p.print(env().flat()->solveItem());
+  std::stringstream ssm;
+  ssm << "Doesn't recognize call \"" << *call << "\"";
+  throw InternalError(ssm.str());
+}
+
+bool MiniZinc::QuboSolverInstance::calcIntLinEqQubo(const IntVal& coef, Id* id,
+                                                    Expression* e1,
+                                                    Expression* e2) {
+  // e.g.:
+  // int_lin_eq(
+  //     [1,1,1,1,1,1,-1],
+  //     [X_INTRODUCED_7_,X_INTRODUCED_9_,X_INTRODUCED_11_,X_INTRODUCED_13_,
+  //      X_INTRODUCED_15_,X_INTRODUCED_17_,cost],
+  //     0):: defines_var(cost)
+  assert(e1->type().dim() == 1); // 1d array
+  assert(e2->type().dim() == 1); // 1d array
+  assert(e1->type().ti() == Type::TypeInst::TI_PAR); // an array of parameters.
+  assert(e2->type().ti() == Type::TypeInst::TI_VAR); // an array of variables.
+  // Retrieve array literal.
+  auto* al1 = e1->cast<ArrayLit>();
+  auto* al2 = e2->cast<ArrayLit>();
+  assert(al1 != nullptr && al2 != nullptr);
+  assert(al1->length() == al2->length());
+  // Find id from al2.
+  long long idx = -1;
+  for (long long i = 0; i < al2->length(); ++i) {
+    if ((*al2)[i] == id) {
+      assert(idx == -1);
+      idx = i;
+    }
   }
-#endif
+  // Retreive coeffcient of id.
+  IntVal coefId = eval_int(env().envi(), (*al1)[idx]);
+  coefId *= coef;
+  // Calculate Qubo matrix
+  for (long long i = 0; i < al1->length(); ++i) {
+    if (i != idx) {
+      IntVal coef = eval_int(env().envi(), (*al1)[i]);
+      coef *= coefId;
+      calcQubo(coef, (*al2)[i]);
+    }
+  }
   return true;
+}
+
+bool MiniZinc::QuboSolverInstance::calcIntTimesQubo(const IntVal& coef, Id* id,
+                                                    Expression* e1,
+                                                    Expression* e2) {
+  // e.g.:
+  // int_times(X_INTRODUCED_7_,X_INTRODUCED_1_,X_INTRODUCED_8_)::
+  //     defines_var(X_INTRODUCED_8_)"
+  assert(e1->type().dim() == 0); // not an array
+  assert(e2->type().dim() == 0); // not an array
+  assert(e1->type().ti() == Type::TypeInst::TI_VAR); // a variable.
+  assert(e2->type().ti() == Type::TypeInst::TI_VAR); // a variable.
+  return calcQubo(coef, e1) && calcQubo(coef, e2);
+}
+
+bool MiniZinc::QuboSolverInstance::calcBool2IntQubo(const IntVal& coef, Id* id,
+                                                    Expression* e1,
+                                                    Expression* e2) {
+  // e.g.:
+  // bool2int(X_INTRODUCED_6_,X_INTRODUCED_7_):: defines_var(X_INTRODUCED_7_)
+  assert(e1->type().dim() == 0); // not an array
+  assert(e2->type().dim() == 0); // not an array
+  assert(e1->type().ti() == Type::TypeInst::TI_VAR); // a variable.
+  assert(e2->type().ti() == Type::TypeInst::TI_VAR); // a variable.
+  // Retrieve Id.
+  auto* id1 = e1->cast<Id>();
+  auto* id2 = e2->cast<Id>();
+  assert(id2 == id);
+  return calcQubo(coef, e1);
+}
+
+bool MiniZinc::QuboSolverInstance::isInt(Expression* e, long long v) {
+  if (e->type() == Type::parint()) {
+    IntVal iv = eval_int(env().envi(), e);
+    if (iv.toInt() == v)
+      return true;
+  }
+  std::stringstream ssm;
+  ssm << "Expected int, " << v << ", instead of \"" << *e << "\"";
+  throw InternalError(ssm.str());
+  return false;
 }
 
 SolverInstanceBase::Status MiniZinc::QuboSolverInstance::solve() {
@@ -337,7 +448,38 @@ SolverInstanceBase::Status MiniZinc::QuboSolverInstance::solve() {
       return status;
     }
   }
-  if (!calcQubo(si->e())) {
+#if 1
+  {
+    Printer p(std::cerr);
+    std::cerr << "solveItem\n";
+    p.print(si->e());
+  }
+#endif
+#if 1
+  dumpVar();
+#endif
+#if 1
+  {
+    Printer p(std::cerr);
+    std::cerr << "Flat--------\n";
+    p.print(env().flat());
+    std::cerr << "Calc--------\n";
+  }
+#endif
+  VarDecl* objVd;
+  if (Id* id = si->e()->dynamicCast<Id>()) {
+    objVd = id->decl();
+  } else {
+    std::cerr << "Objective must be Id: " << *si->e() << std::endl;
+    throw InternalError("Objective must be Id");
+  }
+  IntVal coef(1);
+  if (_objType == SolveI::ST_MIN) {
+    coef *= -1;
+  } else {
+    assert(_objType == SolveI::ST_MAX);
+  }
+  if (!calcQubo(coef, objVd->id())) {
     return status;
   }
   status = SolverInstance::SAT;
@@ -472,6 +614,25 @@ inline void QuboSolverInstance::dumpVar(void) {
   _log << "dumpVar----------------\n";
   for (auto const& pair : _variableMap) {
     _log << *pair.first << ": " << pair.second.index() << "\n";
+  }
+}
+
+inline void QuboSolverInstance::insertCall(Id* id, Call* call) {
+  // std::cerr << *id << ": " << id->decl() << std::endl;
+  assert(_variableCallMap.find(id) == _variableCallMap.end());
+  _variableCallMap.insert(id, call);
+}
+
+inline Call* QuboSolverInstance::resolveCall(Id* id) {
+  // std::cerr << *id << ": " << id->decl() << std::endl;
+  assert(_variableCallMap.find(id) != _variableCallMap.end());
+  return _variableCallMap.find(id)->second;
+}
+
+inline void QuboSolverInstance::dumpCall(void) {
+  _log << "dumpCall----------------\n";
+  for (auto const& pair : _variableCallMap) {
+    _log << *pair.first << ": " << pair.second << "\n";
   }
 }
 
